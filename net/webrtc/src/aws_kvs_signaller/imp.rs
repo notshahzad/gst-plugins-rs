@@ -58,6 +58,7 @@ struct Settings {
     session_token: Option<String>,
     channel_name: Option<String>,
     ping_timeout: i32,
+    audio_sink: Option<String> ,
 }
 
 impl Default for Settings {
@@ -70,6 +71,7 @@ impl Default for Settings {
             session_token: None,
             channel_name: None,
             ping_timeout: DEFAULT_PING_TIMEOUT,
+            audio_sink: None,
         }
     }
 }
@@ -667,6 +669,10 @@ impl ObjectImpl for Signaller {
                     .default_value(DEFAULT_PING_TIMEOUT)
                     .minimum(1)
                     .build(),
+                glib::ParamSpecString::builder("audio-sink")
+                    .nick("audio sink")
+                    .blurb("audio index of device to output the audio to")
+                    .build(),
             ]
         });
 
@@ -710,7 +716,12 @@ impl ObjectImpl for Signaller {
             }
             "ping-timeout" => {
                 let mut settings = self.settings.lock().unwrap();
-                settings.ping_timeout = value.get().unwrap();
+
+            }
+            "audio-sink" => {
+               let mut settings = self.settings.lock().unwrap();
+               settings.audio_sink = Some(value.get::<String>().unwrap());
+               println!("{:?}",settings.audio_sink);
             }
             _ => unimplemented!(),
         }
@@ -737,6 +748,7 @@ impl ObjectImpl for Signaller {
                 settings.session_token.to_value()
             }
             "channel-name" => self.settings.lock().unwrap().channel_name.to_value(),
+            "audio-sink" => self.settings.lock().unwrap().audio_sink.to_value(),
             "ping-timeout" => self.settings.lock().unwrap().ping_timeout.to_value(),
             _ => unimplemented!(),
         }

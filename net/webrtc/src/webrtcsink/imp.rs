@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::utils::{cleanup_codec_caps, is_raw_caps, make_element, Codec, Codecs, NavigationEvent};
+use crate::webrtcsink::pad;
 use anyhow::Context;
 use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
+use std::io::BufRead;
 use gst_rtp::prelude::*;
 use gst_utils::StreamProducer;
 use gst_video::subclass::prelude::*;
 use gst_webrtc::{WebRTCDataChannel, WebRTCICETransportPolicy};
+use std::io::Read;
 
 use futures::prelude::*;
 
@@ -17,6 +20,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
 use std::ops::Mul;
+use std::str::FromStr;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 
 use super::homegrown_cc::CongestionController;
@@ -1502,7 +1506,12 @@ impl BaseWebRTCSink {
             return Ok(());
         };
 
-        gst::debug!(CAT, obj: payloader, "Mapping TWCC extension to ID {}", twcc_id);
+        gst::debug!(
+            CAT,
+            obj: payloader,
+            "Mapping TWCC extension to ID {}",
+            twcc_id
+        );
 
         /* We only enforce TWCC in the offer caps, once a remote description
          * has been set it will get automatically negotiated. This is necessary
@@ -1568,7 +1577,12 @@ impl BaseWebRTCSink {
                     .map(|value| value.get::<gst_rtp::RTPHeaderExtension>().unwrap());
 
                 if let Some(ext) = twcc {
-                    gst::debug!(CAT, obj: payloader, "TWCC extension is already mapped to id {} by application", ext.id());
+                    gst::debug!(
+                        CAT,
+                        obj: payloader,
+                        "TWCC extension is already mapped to id {} by application",
+                        ext.id()
+                    );
                     return None;
                 }
 
@@ -1746,7 +1760,11 @@ impl BaseWebRTCSink {
             };
 
             if let Some(msid) = stream.msid() {
-                gst::trace!(CAT, obj: element, "forwarding msid={msid:?} to webrtcbin sinkpad");
+                gst::trace!(
+                    CAT,
+                    obj: element,
+                    "forwarding msid={msid:?} to webrtcbin sinkpad"
+                );
                 pad.set_property("msid", &msid);
             }
 
@@ -1754,7 +1772,7 @@ impl BaseWebRTCSink {
 
             transceiver.set_property(
                 "direction",
-                gst_webrtc::WebRTCRTPTransceiverDirection::Sendonly,
+                gst_webrtc::WebRTCRTPTransceiverDirection::Sendrecv,
             );
 
             transceiver.set_property("codec-preferences", &payloader_caps);
@@ -2448,11 +2466,57 @@ impl BaseWebRTCSink {
             }
             _ => None,
         };
-
         pipeline.add(&webrtcbin).unwrap();
 
         let element_clone = element.downgrade();
         let session_id_clone = session_id.clone();
+        let closure_settings = settings.clone();
+
+        webrtcbin.connect_closure(
+            "pad-added",
+            false,
+            glib::closure!(@weak-allow-none pipeline, => move |element: gst::Element, pad_type: gst::Pad| {
+                //Caps(application/x-rtp(memory:SystemMemory) { media: (gchararray) "audio", payload: (gint) 111, clock-rate: (gint) 48000, encoding-name: (gchararray) "OPUS", encoding-params: (gchararray) "2", minptime: (gchararray) "10", useinbandfec: (gchararray) "1", sprop-stereo: (gchararray) "0", sprop-maxcapturerate: (gchararray) "48000", rtcp-fb-transport-cc: (gboolean) TRUE, extmap-3: (gchararray) "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", ssrc-371799109-msid: (gchararray) "user1514699516@host-961be839 webrtctransceiver0", ssrc-371799109-cname: (gchararray) "user1514699516@host-961be839", ssrc: (guint) 3613824134 })
+                match pad_type.direction() {
+                    gst::PadDirection::Src => {
+                        let current_caps = pad_type.current_caps().expect("failed to get caps of webrtcbin");
+                        let caps_struct = current_caps.structure(0).expect("failed to convert caps to struct");
+                        if caps_struct.value("media").unwrap().serialize().unwrap() == "audio" {
+                            println!("got audio src pad creating pipeline");
+                        let prop :Option<String> = closure_settings.signaller.property("audio-sink");
+                        if prop.is_none(){
+                            return
+                        }
+                        let prop = prop.unwrap();
+                            let opus_depay = make_element("rtpopusdepay", None).expect("failed to create element: udpsink");
+                            let opusdec = make_element("opusdec", None).expect("failed to create element: udpsink");
+                            let audioconvert  = make_element("audioconvert", None).expect("failed to create element: udpsink");
+                            let resample = make_element("audioresample", None).expect("failed to create element: udpsink");
+                            let audiosink = make_element("osxaudiosink", None).expect("failed to create element: osxaudiosink");
+                            let port_number = prop.parse::<i32>().expect("audio index should be an integer");
+                            println!("setting up audio-sink: {}",port_number);
+                            audiosink.set_property("device",port_number);
+
+                            let pipeline = pipeline.expect("pipeline can't be NULL:unreachable");
+                            pipeline.add(&opus_depay).unwrap();
+                            pipeline.add(&opusdec).unwrap();
+                            pipeline.add(&audioconvert).unwrap();
+                            pipeline.add(&resample).unwrap();
+                            pipeline.add(&audiosink).unwrap();
+                            gst::Element::sync_state_with_parent(&opus_depay).unwrap();
+                            gst::Element::sync_state_with_parent(&opusdec).unwrap();
+                            gst::Element::sync_state_with_parent(&audioconvert).unwrap();
+                            gst::Element::sync_state_with_parent(&resample).unwrap();
+                            gst::Element::sync_state_with_parent(&audiosink).unwrap();
+
+                            gst::Element::link_many([element, opus_depay,opusdec,audioconvert,resample,audiosink]).unwrap();
+                        }
+                    }
+                    gst::PadDirection::Sink => {println!("got sink pad from webrtcbin, ignoring...")},
+                    gst::PadDirection::Unknown => { println!("failed to identify the type of pad: Ignoring"); },
+                }
+            }),
+        );
         webrtcbin.connect("on-ice-candidate", false, move |values| {
             if let Some(element) = element_clone.upgrade() {
                 let this = element.imp();
