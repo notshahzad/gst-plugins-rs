@@ -2479,37 +2479,45 @@ impl BaseWebRTCSink {
                 //Caps(application/x-rtp(memory:SystemMemory) { media: (gchararray) "audio", payload: (gint) 111, clock-rate: (gint) 48000, encoding-name: (gchararray) "OPUS", encoding-params: (gchararray) "2", minptime: (gchararray) "10", useinbandfec: (gchararray) "1", sprop-stereo: (gchararray) "0", sprop-maxcapturerate: (gchararray) "48000", rtcp-fb-transport-cc: (gboolean) TRUE, extmap-3: (gchararray) "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01", ssrc-371799109-msid: (gchararray) "user1514699516@host-961be839 webrtctransceiver0", ssrc-371799109-cname: (gchararray) "user1514699516@host-961be839", ssrc: (guint) 3613824134 })
                 match pad_type.direction() {
                     gst::PadDirection::Src => {
+                        let prop :Option<String> = closure_settings.signaller.property("audio-sink");
+                        println!("prop: {:?}",prop);
+                        println!("returning");
+                        if prop.is_none(){
+                            let fakesink = make_element("fakesink", None).expect("failed to create element: fakesink");
+                            let pipeline = pipeline.expect("pipeline can't be NULL:unreachable");
+                            pipeline.add(&fakesink).unwrap();
+                            gst::Element::sync_state_with_parent(&fakesink).unwrap();
+                            gst::Element::link_many([element, fakesink]).unwrap();
+                            return
+                        }
+                        println!("returned");
                         let current_caps = pad_type.current_caps().expect("failed to get caps of webrtcbin");
                         let caps_struct = current_caps.structure(0).expect("failed to convert caps to struct");
                         if caps_struct.value("media").unwrap().serialize().unwrap() == "audio" {
                             println!("got audio src pad creating pipeline");
-                        let prop :Option<String> = closure_settings.signaller.property("audio-sink");
-                        if prop.is_none(){
-                            return
-                        }
                         let prop = prop.unwrap();
-                            let opus_depay = make_element("rtpopusdepay", None).expect("failed to create element: udpsink");
-                            let opusdec = make_element("opusdec", None).expect("failed to create element: udpsink");
-                            let audioconvert  = make_element("audioconvert", None).expect("failed to create element: udpsink");
-                            let resample = make_element("audioresample", None).expect("failed to create element: udpsink");
-                            let audiosink = make_element("osxaudiosink", None).expect("failed to create element: osxaudiosink");
-                            let port_number = prop.parse::<i32>().expect("audio index should be an integer");
-                            println!("setting up audio-sink: {}",port_number);
-                            audiosink.set_property("device",port_number);
+                        let opus_depay = make_element("rtpopusdepay", None).expect("failed to create element: udpsink");
+                        let opusdec = make_element("opusdec", None).expect("failed to create element: udpsink");
+                        let audioconvert  = make_element("audioconvert", None).expect("failed to create element: udpsink");
+                        let resample = make_element("audioresample", None).expect("failed to create element: udpsink");
+                        let audiosink = make_element("osxaudiosink", None).expect("failed to create element: osxaudiosink");
+                        let port_number = prop.parse::<i32>().expect("audio index should be an integer");
+                        println!("setting up audio-sink: {}",port_number);
+                        audiosink.set_property("device",port_number);
 
-                            let pipeline = pipeline.expect("pipeline can't be NULL:unreachable");
-                            pipeline.add(&opus_depay).unwrap();
-                            pipeline.add(&opusdec).unwrap();
-                            pipeline.add(&audioconvert).unwrap();
-                            pipeline.add(&resample).unwrap();
-                            pipeline.add(&audiosink).unwrap();
-                            gst::Element::sync_state_with_parent(&opus_depay).unwrap();
-                            gst::Element::sync_state_with_parent(&opusdec).unwrap();
-                            gst::Element::sync_state_with_parent(&audioconvert).unwrap();
-                            gst::Element::sync_state_with_parent(&resample).unwrap();
-                            gst::Element::sync_state_with_parent(&audiosink).unwrap();
+                        let pipeline = pipeline.expect("pipeline can't be NULL:unreachable");
+                        pipeline.add(&opus_depay).unwrap();
+                        pipeline.add(&opusdec).unwrap();
+                        pipeline.add(&audioconvert).unwrap();
+                        pipeline.add(&resample).unwrap();
+                        pipeline.add(&audiosink).unwrap();
+                        gst::Element::sync_state_with_parent(&opus_depay).unwrap();
+                        gst::Element::sync_state_with_parent(&opusdec).unwrap();
+                        gst::Element::sync_state_with_parent(&audioconvert).unwrap();
+                        gst::Element::sync_state_with_parent(&resample).unwrap();
+                        gst::Element::sync_state_with_parent(&audiosink).unwrap();
 
-                            gst::Element::link_many([element, opus_depay,opusdec,audioconvert,resample,audiosink]).unwrap();
+                        gst::Element::link_many([element, opus_depay,opusdec,audioconvert,resample,audiosink]).unwrap();
                         }
                     }
                     gst::PadDirection::Sink => {println!("got sink pad from webrtcbin, ignoring...")},
